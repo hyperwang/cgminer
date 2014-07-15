@@ -244,7 +244,7 @@ static inline int fsync (int fd)
 	DRIVER_ADD_COMMAND(drillbit) \
 	DRIVER_ADD_COMMAND(bab) \
 	DRIVER_ADD_COMMAND(minion) \
-	DRIVER_ADD_COMMAND(spondoolies) \
+	DRIVER_ADD_COMMAND(sp10) \
 	DRIVER_ADD_COMMAND(sp30)
 
 #define DRIVER_PARSE_COMMANDS(DRIVER_ADD_COMMAND) \
@@ -1025,8 +1025,14 @@ extern int opt_minion_chipreport;
 extern char *opt_minion_cores;
 extern char *opt_minion_freq;
 extern bool opt_minion_idlecount;
+extern int opt_minion_ledcount;
+extern int opt_minion_ledlimit;
 extern bool opt_minion_noautofreq;
 extern bool opt_minion_overheat;
+extern int opt_minion_spidelay;
+extern char *opt_minion_spireset;
+extern int opt_minion_spisleep;
+extern int opt_minion_spiusec;
 extern char *opt_minion_temp;
 #endif
 #ifdef USE_USBUTILS
