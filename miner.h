@@ -231,12 +231,14 @@ static inline int fsync (int fd)
 #define ASIC_PARSE_COMMANDS(DRIVER_ADD_COMMAND) \
 	DRIVER_ADD_COMMAND(ants1) \
 	DRIVER_ADD_COMMAND(ants2) \
-	DRIVER_ADD_COMMAND(avalon2) \
 	DRIVER_ADD_COMMAND(avalon) \
+	DRIVER_ADD_COMMAND(avalon2) \
 	DRIVER_ADD_COMMAND(bflsc) \
 	DRIVER_ADD_COMMAND(bitfury) \
+	DRIVER_ADD_COMMAND(blockerupter) \
 	DRIVER_ADD_COMMAND(cointerra) \
 	DRIVER_ADD_COMMAND(hashfast) \
+	DRIVER_ADD_COMMAND(hashratio) \
 	DRIVER_ADD_COMMAND(icarus) \
 	DRIVER_ADD_COMMAND(klondike) \
 	DRIVER_ADD_COMMAND(knc) \
@@ -347,6 +349,9 @@ struct device_drv {
 
 	/* Highest target diff the device supports */
 	double max_diff;
+
+	/* Lowest diff the controller can safely run at */
+	double min_diff;
 };
 
 extern struct device_drv *copy_drv(struct device_drv*);
@@ -955,6 +960,7 @@ static inline void _cg_wunlock(cglock_t *lock, const char *file, const char *fun
 
 struct pool;
 
+#define API_LISTEN_ADDR "0.0.0.0"
 #define API_MCAST_CODE "FTW"
 #define API_MCAST_ADDR "224.0.0.75"
 
@@ -963,6 +969,7 @@ extern bool opt_protocol;
 extern bool have_longpoll;
 extern char *opt_kernel_path;
 extern char *opt_socks_proxy;
+extern int opt_suggest_diff;
 extern char *cgminer_path;
 extern bool opt_fail_only;
 extern bool opt_lowmem;
@@ -978,6 +985,7 @@ extern int opt_api_mcast_port;
 extern char *opt_api_groups;
 extern char *opt_api_description;
 extern int opt_api_port;
+extern char *opt_api_host;
 extern bool opt_api_listen;
 extern bool opt_api_network;
 extern bool opt_delaynet;
@@ -1023,7 +1031,10 @@ extern bool opt_bitmain_tempoverctrl;
 #ifdef USE_MINION
 extern int opt_minion_chipreport;
 extern char *opt_minion_cores;
+extern bool opt_minion_extra;
 extern char *opt_minion_freq;
+extern int opt_minion_freqchange;
+extern int opt_minion_freqpercent;
 extern bool opt_minion_idlecount;
 extern int opt_minion_ledcount;
 extern int opt_minion_ledlimit;
@@ -1092,6 +1103,10 @@ extern pthread_cond_t restart_cond;
 extern void clear_stratum_shares(struct pool *pool);
 extern void clear_pool_work(struct pool *pool);
 extern void set_target(unsigned char *dest_target, double diff);
+#if defined (USE_AVALON2) || defined (USE_HASHRATIO)
+bool submit_nonce2_nonce(struct thr_info *thr, struct pool *pool, struct pool *real_pool,
+			 uint32_t nonce2, uint32_t nonce);
+#endif
 extern int restart_wait(struct thr_info *thr, unsigned int mstime);
 
 extern void kill_work(void);
@@ -1201,6 +1216,7 @@ struct pool {
 	bool submit_old;
 	bool removed;
 	bool lp_started;
+	bool blocking;
 
 	char *hdr_path;
 	char *lp_url;
@@ -1438,6 +1454,7 @@ extern int share_work_tdiff(struct cgpu_info *cgpu);
 extern struct work *get_work(struct thr_info *thr, const int thr_id);
 extern void __add_queued(struct cgpu_info *cgpu, struct work *work);
 extern struct work *get_queued(struct cgpu_info *cgpu);
+extern struct work *__get_queued(struct cgpu_info *cgpu);
 extern void add_queued(struct cgpu_info *cgpu, struct work *work);
 extern struct work *get_queue_work(struct thr_info *thr, struct cgpu_info *cgpu, int thr_id);
 extern struct work *__find_work_bymidstate(struct work *que, char *midstate, size_t midstatelen, char *data, int offset, size_t datalen);

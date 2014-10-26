@@ -46,6 +46,7 @@
 #define DEFAULT_SOCKWAIT 60
 
 bool successful_connect = false;
+
 static void keep_sockalive(SOCKETTYPE fd)
 {
 	const int tcp_one = 1;
@@ -77,6 +78,171 @@ static void keep_sockalive(SOCKETTYPE fd)
 #endif /* __APPLE_CC__ */
 
 }
+
+#ifdef WIN32
+/* Generic versions of inet_pton for windows, using different names in case
+ * it is implemented in ming in the future. */
+#define W32NS_INADDRSZ  4
+#define W32NS_IN6ADDRSZ 16
+#define W32NS_INT16SZ   2
+
+static int Inet_Pton4(const char *src, char *dst)
+{
+	uint8_t tmp[W32NS_INADDRSZ], *tp;
+
+	int saw_digit = 0;
+	int octets = 0;
+	*(tp = tmp) = 0;
+
+	int ch;
+	while ((ch = *src++) != '\0')
+	{
+		if (ch >= '0' && ch <= '9')
+		{
+			uint32_t n = *tp * 10 + (ch - '0');
+
+			if (saw_digit && *tp == 0)
+				return 0;
+
+			if (n > 255)
+				return 0;
+
+			*tp = n;
+			if (!saw_digit)
+			{
+				if (++octets > 4)
+					return 0;
+				saw_digit = 1;
+			}
+		}
+		else if (ch == '.' && saw_digit)
+		{
+			if (octets == 4)
+				return 0;
+			*++tp = 0;
+			saw_digit = 0;
+		}
+		else
+			return 0;
+	}
+	if (octets < 4)
+		return 0;
+
+	memcpy(dst, tmp, W32NS_INADDRSZ);
+
+	return 1;
+}
+
+static int Inet_Pton6(const char *src, char *dst)
+{
+	static const char xdigits[] = "0123456789abcdef";
+	uint8_t tmp[W32NS_IN6ADDRSZ];
+
+	uint8_t *tp = (uint8_t*) memset(tmp, '\0', W32NS_IN6ADDRSZ);
+	uint8_t *endp = tp + W32NS_IN6ADDRSZ;
+	uint8_t *colonp = NULL;
+
+	/* Leading :: requires some special handling. */
+	if (*src == ':')
+	{
+		if (*++src != ':')
+			return 0;
+	}
+
+	const char *curtok = src;
+	int saw_xdigit = 0;
+	uint32_t val = 0;
+	int ch;
+	while ((ch = tolower(*src++)) != '\0')
+	{
+		const char *pch = strchr(xdigits, ch);
+		if (pch != NULL)
+		{
+			val <<= 4;
+			val |= (pch - xdigits);
+			if (val > 0xffff)
+				return 0;
+			saw_xdigit = 1;
+			continue;
+		}
+		if (ch == ':')
+		{
+			curtok = src;
+			if (!saw_xdigit)
+			{
+				if (colonp)
+					return 0;
+				colonp = tp;
+				continue;
+			}
+			else if (*src == '\0')
+			{
+				return 0;
+			}
+			if (tp + W32NS_INT16SZ > endp)
+				return 0;
+			*tp++ = (uint8_t) (val >> 8) & 0xff;
+			*tp++ = (uint8_t) val & 0xff;
+			saw_xdigit = 0;
+			val = 0;
+			continue;
+		}
+		if (ch == '.' && ((tp + W32NS_INADDRSZ) <= endp) &&
+			Inet_Pton4(curtok, (char*) tp) > 0)
+		{
+			tp += W32NS_INADDRSZ;
+			saw_xdigit = 0;
+			break; /* '\0' was seen by inet_pton4(). */
+		}
+		return 0;
+	}
+	if (saw_xdigit)
+	{
+		if (tp + W32NS_INT16SZ > endp)
+			return 0;
+		*tp++ = (uint8_t) (val >> 8) & 0xff;
+		*tp++ = (uint8_t) val & 0xff;
+	}
+	if (colonp != NULL)
+	{
+		int i;
+		/*
+			* Since some memmove()'s erroneously fail to handle
+			* overlapping regions, we'll do the shift by hand.
+			*/
+		const int n = tp - colonp;
+
+		if (tp == endp)
+			return 0;
+
+		for (i = 1; i <= n; i++)
+		{
+			endp[-i] = colonp[n - i];
+			colonp[n - i] = 0;
+		}
+		tp = endp;
+	}
+	if (tp != endp)
+		return 0;
+
+	memcpy(dst, tmp, W32NS_IN6ADDRSZ);
+
+	return 1;
+}
+
+int Inet_Pton(int af, const char *src, void *dst)
+{
+	switch (af)
+	{
+		case AF_INET:
+			return Inet_Pton4(src, dst);
+		case AF_INET6:
+			return Inet_Pton6(src, dst);
+		default:
+			return -1;
+	}
+}
+#endif
 
 struct tq_ent {
 	void			*data;
@@ -1112,14 +1278,23 @@ void ms_to_timeval(struct timeval *val, int64_t ms)
 	val->tv_usec = tvdiv.rem * 1000;
 }
 
+static void spec_nscheck(struct timespec *ts)
+{
+	while (ts->tv_nsec >= 1000000000) {
+		ts->tv_nsec -= 1000000000;
+		ts->tv_sec++;
+	}
+	while (ts->tv_nsec < 0) {
+		ts->tv_nsec += 1000000000;
+		ts->tv_sec--;
+	}
+}
+
 void timeraddspec(struct timespec *a, const struct timespec *b)
 {
 	a->tv_sec += b->tv_sec;
 	a->tv_nsec += b->tv_nsec;
-	if (a->tv_nsec >= 1000000000) {
-		a->tv_nsec -= 1000000000;
-		a->tv_sec++;
-	}
+	spec_nscheck(a);
 }
 
 static int __maybe_unused timespec_to_ms(struct timespec *ts)
@@ -1132,17 +1307,58 @@ static void __maybe_unused timersubspec(struct timespec *a, const struct timespe
 {
 	a->tv_sec -= b->tv_sec;
 	a->tv_nsec -= b->tv_nsec;
-	if (a->tv_nsec < 0) {
-		a->tv_nsec += 1000000000;
-		a->tv_sec--;
-	}
+	spec_nscheck(a);
 }
+
+char *Strcasestr(char *haystack, const char *needle)
+{
+	char *lowhay, *lowneedle, *ret;
+	int hlen, nlen, i, ofs;
+
+	if (unlikely(!haystack || !needle))
+		return NULL;
+	hlen = strlen(haystack);
+	nlen = strlen(needle);
+	if (!hlen || !nlen)
+		return NULL;
+	lowhay = alloca(hlen);
+	lowneedle = alloca(nlen);
+	for (i = 0; i < hlen; i++)
+		lowhay[i] = tolower(haystack[i]);
+	for (i = 0; i < nlen; i++)
+		lowneedle[i] = tolower(needle[i]);
+	ret = strstr(lowhay, lowneedle);
+	if (!ret)
+		return ret;
+	ofs = ret - lowhay;
+	return haystack + ofs;
+}
+
+char *Strsep(char **stringp, const char *delim)
+{
+	char *ret = *stringp;
+	char *p;
+
+	p = (ret != NULL) ? strpbrk(ret, delim) : NULL;
+
+	if (p == NULL)
+		*stringp = NULL;
+	else {
+		*p = '\0';
+		*stringp = p + 1;
+	}
+
+	return ret;
+}
+
+#ifdef WIN32
+/* Mingw32 has no strsep so create our own custom one  */
+
+/* Windows start time is since 1601 LOL so convert it to unix epoch 1970. */
+#define EPOCHFILETIME (116444736000000000LL)
 
 /* These are cgminer specific sleep functions that use an absolute nanosecond
  * resolution timer to avoid poor usleep accuracy and overruns. */
-#ifdef WIN32
-/* Windows start time is since 1601 LOL so convert it to unix epoch 1970. */
-#define EPOCHFILETIME (116444736000000000LL)
 
 /* Return the system time as an lldiv_t in decimicroseconds. */
 static void decius_time(lldiv_t *lidiv)
@@ -1426,7 +1642,13 @@ bool extract_sockaddr(char *url, char **sockaddr_url, char **sockaddr_port)
 
 	if (url_len < 1)
 		return false;
-
+	
+	/* Get rid of the [] */
+	if (ipv6_begin && ipv6_end && ipv6_end > ipv6_begin) {
+		url_len -= 2;
+		url_begin++;
+	}
+	
 	snprintf(url_address, 254, "%.*s", url_len, url_begin);
 
 	if (port_len) {
@@ -1556,7 +1778,8 @@ bool sock_full(struct pool *pool)
 
 static void clear_sockbuf(struct pool *pool)
 {
-	strcpy(pool->sockbuf, "");
+	if (likely(pool->sockbuf))
+		strcpy(pool->sockbuf, "");
 }
 
 static void clear_sock(struct pool *pool)
@@ -2103,6 +2326,11 @@ bool auth_stratum(struct pool *pool)
 	pool->probed = true;
 	successful_connect = true;
 
+	if (opt_suggest_diff) {
+		sprintf(s, "{\"id\": %d, \"method\": \"mining.suggest_difficulty\", \"params\": [%d]}",
+			swork_id++, opt_suggest_diff);
+		stratum_send(pool, s, strlen(s));
+	}
 out:
 	json_decref(val);
 	return ret;
