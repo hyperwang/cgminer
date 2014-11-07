@@ -1619,7 +1619,7 @@ void cgsleep_us(int64_t us)
 {
 	cgtimer_t ts_start;
 
-	cgsleep_prepare_(&ts_start);
+	cgsleep_prepare_r(&ts_start);
 	cgsleep_us_r(&ts_start, us);
 }
 
@@ -1665,6 +1665,7 @@ void check_extranonce_option(struct pool *pool, char * url)
         }
 	return;
 }
+
 
 bool extract_sockaddr(char *url, char **sockaddr_url, char **sockaddr_port)
 {
@@ -2137,10 +2138,39 @@ out:
 	return ret;
 }
 
+static bool parse_diff(struct pool *pool, json_t *val)
+{
+	double old_diff, diff;
+
+	diff = json_number_value(json_array_get(val, 0));
+	if (diff == 0)
+		return false;
+
+	cg_wlock(&pool->data_lock);
+	old_diff = pool->sdiff;
+	pool->sdiff = diff;
+	cg_wunlock(&pool->data_lock);
+
+	if (old_diff != diff) {
+		int idiff = diff;
+
+		if ((double)idiff == diff)
+			applog(LOG_NOTICE, "Pool %d difficulty changed to %d",
+			       pool->pool_no, idiff);
+		else
+			applog(LOG_NOTICE, "Pool %d difficulty changed to %.1f",
+			       pool->pool_no, diff);
+	} else
+		applog(LOG_DEBUG, "Pool %d difficulty set to %f", pool->pool_no,
+		       diff);
+
+	return true;
+}
+
 static bool parse_extranonce(struct pool *pool, json_t *val)
 {
         int n2size;
-	char *nonce1;
+	char* nonce1;
         
         nonce1 = json_array_string(val, 0);
         if (!valid_hex(nonce1)) {
@@ -2169,37 +2199,6 @@ static bool parse_extranonce(struct pool *pool, json_t *val)
 	return true;
 out:
 	return false;
-}
-
-
-
-static bool parse_diff(struct pool *pool, json_t *val)
-{
-	double old_diff, diff;
-
-	diff = json_number_value(json_array_get(val, 0));
-	if (diff == 0)
-		return false;
-
-	cg_wlock(&pool->data_lock);
-	old_diff = pool->sdiff;
-	pool->sdiff = diff;
-	cg_wunlock(&pool->data_lock);
-
-	if (old_diff != diff) {
-		int idiff = diff;
-
-		if ((double)idiff == diff)
-			applog(LOG_NOTICE, "Pool %d difficulty changed to %d",
-			       pool->pool_no, idiff);
-		else
-			applog(LOG_NOTICE, "Pool %d difficulty changed to %.1f",
-			       pool->pool_no, diff);
-	} else
-		applog(LOG_DEBUG, "Pool %d difficulty set to %f", pool->pool_no,
-		       diff);
-
-	return true;
 }
 
 static void __suspend_stratum(struct pool *pool)
@@ -2342,14 +2341,15 @@ bool parse_method(struct pool *pool, char *s)
 			pool->stratum_notify = ret = false;
 		goto out_decref;
 	}
-
-	if (!strncasecmp(buf, "mining.set_difficulty", 21)) {
-		ret = parse_diff(pool, params);
+		
+	if(!strncasecmp(buf, "mining.set_extranonce", 21)) {
+		ret = parse_extranonce(pool, params);
 		goto out_decref;
 	}
 
-	if(!strncasecmp(buf, "mining.set_extranonce", 21)) {
-		ret = parse_extranonce(pool, params);
+
+	if (!strncasecmp(buf, "mining.set_difficulty", 21)) {
+		ret = parse_diff(pool, params);
 		goto out_decref;
 	}
 
