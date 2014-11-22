@@ -1659,13 +1659,11 @@ void check_extranonce_option(struct pool *pool, char * url)
 		if(!strcmp(extra_op,"#xnsub"))
 		{
 			pool->extranonce_subscribe = true;
-			printf("Extra nonce subscribing enabled.");
-			return;
+			applog(LOG_DEBUG, "Pool %d extranonce subscribe enabled.", pool->pool_no);
 		}
         }
 	return;
 }
-
 
 bool extract_sockaddr(char *url, char **sockaddr_url, char **sockaddr_port)
 {
@@ -2846,9 +2844,20 @@ void suspend_stratum(struct pool *pool)
 	mutex_unlock(&pool->stratum_lock);
 }
 
+void extranonce_subscribe_stratum(struct pool *pool)
+{
+	char s[RBUFSIZE];
+	if(pool->extranonce_subscribe)
+        {
+        	sprintf(s,"{\"id\": %d, \"method\": \"mining.extranonce.subscribe\", \"params\": []}", swork_id++);
+		applog(LOG_INFO, "Send extranonce.subscribe for stratum pool %d", pool->pool_no);
+                stratum_send(pool, s, strlen(s));
+        }
+}
+
 bool initiate_stratum(struct pool *pool)
 {
-	bool ret = false, recvd = false, noresume = false, sockd = false;
+	bool ret = false, recvd = false, fAuthorized = false, noresume = false, sockd = false;
 	char s[RBUFSIZE], *sret = NULL, *nonce1, *sessionid;
 	json_t *val = NULL, *res_val, *err_val;
 	json_error_t err;
@@ -2946,6 +2955,7 @@ resend:
 
 	if (sessionid)
 		applog(LOG_DEBUG, "Pool %d stratum session id: %s", pool->pool_no, pool->sessionid);
+	
 
 	ret = true;
 out:
@@ -2957,12 +2967,7 @@ out:
 		if (opt_protocol) {
 			applog(LOG_DEBUG, "Pool %d confirmed mining.subscribe with extranonce1 %s extran2size %d",
 			       pool->pool_no, pool->nonce1, pool->n2size);
-		}
-		if(pool->extranonce_subscribe)
-		{
-			sprintf(s,"{\"id\": %d, \"method\": \"mining.extranonce.subscribe\", \"params\": []}", swork_id++);
-		        stratum_send(pool, s, strlen(s));
-		}
+		}	
 	} else {
 		if (recvd && !noresume) {
 			/* Reset the sessionid used for stratum resuming in case the pool
@@ -2998,6 +3003,7 @@ bool restart_stratum(struct pool *pool)
 		goto out;
 	if (!auth_stratum(pool))
 		goto out;
+	extranonce_subscribe_stratum(pool);
 	ret = true;
 out:
 	if (!ret)

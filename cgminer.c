@@ -6811,7 +6811,7 @@ retry_stratum:
 
 		if (!init) {
 			bool ret = initiate_stratum(pool) && auth_stratum(pool);
-
+			extranonce_subscribe_stratum(pool);
 			if (ret)
 				init_stratum_threads(pool);
 			else
